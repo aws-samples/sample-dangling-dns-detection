@@ -1,5 +1,15 @@
 """Pytest configuration and shared fixtures for Dangling DNS Detection tests."""
 
+import os
+
+# Make the test suite self-contained: boto3 client construction requires a region,
+# and these tests run on CI runners and developer machines that may not have AWS
+# configured. Set safe defaults before any boto3 client is created. setdefault
+# leaves real local configuration untouched when it is already present.
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")  # nosec B105 - dummy test credential
+
 import pytest
 from hypothesis import settings, Verbosity
 
