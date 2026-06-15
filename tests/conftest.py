@@ -3,23 +3,29 @@
 import pytest
 from hypothesis import settings, Verbosity
 
-# Configure hypothesis settings for property-based tests
+# Configure hypothesis settings for property-based tests.
+# deadline=None disables Hypothesis's per-example time limit. These property tests
+# build and evaluate non-trivial inputs, so individual examples can exceed the
+# default 200ms deadline on slower/shared CI runners, producing flaky failures.
 settings.register_profile(
     "default",
     max_examples=100,
     verbosity=Verbosity.normal,
+    deadline=None,
 )
 
 settings.register_profile(
     "ci",
     max_examples=200,
     verbosity=Verbosity.verbose,
+    deadline=None,
 )
 
 settings.register_profile(
     "debug",
     max_examples=10,
     verbosity=Verbosity.verbose,
+    deadline=None,
 )
 
 settings.load_profile("default")

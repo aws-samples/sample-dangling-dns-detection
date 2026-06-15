@@ -47,3 +47,7 @@ Thumbs.db
 # Lambda deployment
 dist/
 *.zip
+
+# Test/CI local artifacts
+.hypothesis/
+.ci-venv/

@@ -193,7 +193,11 @@ Resources:
           - Sid: AllowLambdaDecrypt
             Effect: Allow
             Principal:
-              AWS: !GetAtt LambdaExecutionRole.Arn
+              # Reference the role by its deterministic ARN instead of !GetAtt to avoid a
+              # circular dependency (Role -> Queue -> Key -> Role). The role name is fixed
+              # via !Sub '${AWS::StackName}-lambda-role' below, so the ARN is known at
+              # template-build time without creating a dependency on the role resource.
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-lambda-role'
             Action:
               - kms:Decrypt
             Resource: '*'
