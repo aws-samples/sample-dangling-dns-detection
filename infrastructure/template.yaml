@@ -1,0 +1,385 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dangling DNS Detection - AWS Config Custom Rule
+
+Parameters:
+  EvaluationFrequency:
+    Type: String
+    Default: TwentyFour_Hours
+    AllowedValues:
+      - One_Hour
+      - Three_Hours
+      - Six_Hours
+      - Twelve_Hours
+      - TwentyFour_Hours
+    Description: How often the Config rule should run
+
+  SNSTopicArn:
+    Type: String
+    Default: ''
+    Description: Optional SNS topic ARN for notifications
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing the Lambda deployment package
+
+  LambdaCodeS3Key:
+    Type: String
+    Default: dangling-dns-detection.zip
+    Description: S3 key for the Lambda deployment package
+
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+      - WARNING
+      - ERROR
+    Description: Lambda function log level
+
+  ReservedConcurrentExecutions:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: Reserved concurrent executions for the Lambda function to prevent execution storms
+
+Conditions:
+  HasSNSTopic: !Not [!Equals [!Ref SNSTopicArn, '']]
+
+Resources:
+  # IAM Role for Lambda function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: >-
+              route53:ListHostedZones, route53:ListResourceRecordSets,
+              config:SelectResourceConfig, cloudwatch:PutMetricData, and
+              sts:GetCallerIdentity do not support resource-level permissions.
+              Each is scoped by condition or inherent API behavior.
+          - id: W28
+            reason: >-
+              Explicit name uses AWS::StackName substitution so it is unique
+              per deployment and does not block stack updates.
+      checkov:
+        skip:
+          - id: CKV_AWS_111
+            comment: >-
+              Wildcard resource required for Route 53, Config advanced queries,
+              CloudWatch PutMetricData, and STS GetCallerIdentity. See inline
+              comments on each statement for justification.
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DanglingDNSDetectionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Route 53 read permissions
+              # Resource: '*' required — route53:ListHostedZones and route53:ListResourceRecordSets
+              # do not support resource-level permissions; they operate across all hosted zones.
+              - Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                  - route53:ListResourceRecordSets
+                Resource: '*'
+              
+              # AWS Config — PutEvaluations scoped to config rules in this account/region.
+              # Cannot use !GetAtt DanglingDNSConfigRule.Arn here due to circular dependency
+              # (Role -> ConfigRule -> Lambda -> Role). Scoped to config-rule/* as the narrowest
+              # feasible alternative.
+              - Effect: Allow
+                Action:
+                  - config:PutEvaluations
+                Resource: !Sub 'arn:aws:config:${AWS::Region}:${AWS::AccountId}:config-rule/*'
+              
+              # AWS Config — SelectResourceConfig (advanced queries)
+              # Resource: '*' required — config:SelectResourceConfig is a global action
+              # that queries across all resource types and does not support resource-level permissions.
+              - Effect: Allow
+                Action:
+                  - config:SelectResourceConfig
+                Resource: '*'
+              
+              # Security Hub permissions scoped to the account's own product ARN
+              - Effect: Allow
+                Action:
+                  - securityhub:BatchImportFindings
+                  - securityhub:BatchUpdateFindings
+                Resource: !Sub 'arn:aws:securityhub:${AWS::Region}:${AWS::AccountId}:product/${AWS::AccountId}/default'
+              
+              # CloudWatch metrics permissions
+              # Resource: '*' required — cloudwatch:PutMetricData does not support
+              # resource-level permissions. Access is restricted via the namespace condition below.
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: DanglingDNS/Detection
+              
+              # STS for account ID
+              # Resource: '*' required — sts:GetCallerIdentity does not support
+              # resource-level permissions; it returns the caller's own identity.
+              - Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: '*'
+
+              # DLQ permissions for failed invocations
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt DeadLetterQueue.Arn
+
+              # KMS decrypt for environment variable encryption
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !GetAtt LambdaEnvEncryptionKey.Arn
+
+  # SNS publish permission (conditional)
+  SNSPublishPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasSNSTopic
+    Properties:
+      PolicyName: SNSPublishPolicy
+      Roles:
+        - !Ref LambdaExecutionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sns:Publish
+            Resource: !Ref SNSTopicArn
+
+  # Dead Letter Queue for failed Lambda invocations
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-dlq'
+      MessageRetentionPeriod: 1209600
+      KmsMasterKeyId: !GetAtt LambdaEnvEncryptionKey.Arn
+
+  # KMS key for encrypting Lambda environment variables
+  LambdaEnvEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub 'Encryption key for ${AWS::StackName} Lambda environment variables'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccountRoot
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowLambdaDecrypt
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt LambdaExecutionRole.Arn
+            Action:
+              - kms:Decrypt
+            Resource: '*'
+
+  LambdaEnvEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-lambda-env'
+      TargetKeyId: !Ref LambdaEnvEncryptionKey
+
+  # Lambda function
+  DetectionLambda:
+    Type: AWS::Lambda::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: >-
+              This Lambda function calls AWS APIs (Route 53, Config, Security Hub,
+              CloudWatch, STS) over public endpoints. It does not access any
+              VPC-internal resources. Deploying inside a VPC would add a NAT
+              Gateway dependency with no security benefit.
+      checkov:
+        skip:
+          - id: CKV_AWS_117
+            comment: >-
+              Lambda accesses only AWS public API endpoints (Route 53, Config,
+              Security Hub, CloudWatch). No VPC resources are involved.
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-detector'
+      Description: Detects dangling CNAME records pointing to deleted AWS resources
+      Runtime: python3.11
+      Handler: src.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      ReservedConcurrentExecutions: !Ref ReservedConcurrentExecutions
+      DeadLetterConfig:
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+      KmsKeyArn: !GetAtt LambdaEnvEncryptionKey.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref LogLevel
+          SNS_TOPIC_ARN: !If [HasSNSTopic, !Ref SNSTopicArn, '']
+      Tags:
+        - Key: Application
+          Value: DanglingDNSDetection
+
+  # Lambda permission for Config
+  ConfigLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DetectionLambda
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  # AWS Config custom rule
+  DanglingDNSConfigRule:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigLambdaPermission
+    Properties:
+      ConfigRuleName: !Sub '${AWS::StackName}-rule'
+      Description: Detects CNAME records pointing to non-existent AWS resources
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceIdentifier: !GetAtt DetectionLambda.Arn
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ScheduledNotification
+            MaximumExecutionFrequency: !Ref EvaluationFrequency
+
+  # CloudWatch Dashboard
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Compliance Overview",
+                "metrics": [
+                  ["DanglingDNS/Detection", "Compliant", {"color": "#2ca02c"}],
+                  [".", "NonCompliant", {"color": "#d62728"}],
+                  [".", "NotApplicable", {"color": "#7f7f7f"}]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "period": 3600,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Total Records Evaluated",
+                "metrics": [
+                  ["DanglingDNS/Detection", "TotalEvaluated"]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 3600,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Non-Compliant by Resource Type",
+                "metrics": [
+                  ["DanglingDNS/Detection", "NonCompliant", "ResourceType", "S3", {"color": "#ff7f0e"}],
+                  [".", ".", ".", "CloudFront", {"color": "#1f77b4"}],
+                  [".", ".", ".", "ElasticBeanstalk", {"color": "#2ca02c"}]
+                ],
+                "view": "timeSeries",
+                "stacked": true,
+                "region": "${AWS::Region}",
+                "period": 3600,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Execution Metrics",
+                "metrics": [
+                  ["DanglingDNS/Detection", "ExecutionDuration"],
+                  [".", "Errors"]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 3600,
+                "stat": "Average"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the detection Lambda function
+    Value: !GetAtt DetectionLambda.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-lambda-arn'
+
+  ConfigRuleArn:
+    Description: ARN of the AWS Config rule
+    Value: !GetAtt DanglingDNSConfigRule.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-config-rule-arn'
+
+  DashboardUrl:
+    Description: URL to the CloudWatch dashboard
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-dashboard'
+
+  IAMRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+
+  DeadLetterQueueArn:
+    Description: ARN of the Dead Letter Queue for failed invocations
+    Value: !GetAtt DeadLetterQueue.Arn
+
+  EncryptionKeyArn:
+    Description: ARN of the KMS key for Lambda environment variable encryption
+    Value: !GetAtt LambdaEnvEncryptionKey.Arn
