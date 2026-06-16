@@ -46,6 +46,8 @@ The solution uses an AWS Config custom rule backed by an AWS Lambda function tha
 
 ## Installation
 
+Follow these steps to deploy the dangling DNS detection solution to your AWS account: confirm the prerequisites, set up your development environment, build the Lambda package, and deploy the AWS CloudFormation stack.
+
 ### Prerequisites
 
 - Python 3.11+
