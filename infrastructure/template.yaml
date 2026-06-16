@@ -57,9 +57,10 @@ Resources:
           - id: W11
             reason: >-
               route53:ListHostedZones, route53:ListResourceRecordSets,
-              config:SelectResourceConfig, cloudwatch:PutMetricData, and
-              sts:GetCallerIdentity do not support resource-level permissions.
-              Each is scoped by condition or inherent API behavior.
+              config:SelectResourceConfig, config:PutEvaluations,
+              cloudwatch:PutMetricData, and sts:GetCallerIdentity do not support
+              resource-level permissions. Each is scoped by condition or inherent
+              API behavior.
           - id: W28
             reason: >-
               Explicit name uses AWS::StackName substitution so it is unique
