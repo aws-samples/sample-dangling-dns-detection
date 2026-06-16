@@ -75,7 +75,7 @@ This solution creates AWS resources that incur charges, including:
 - Amazon CloudWatch Logs storage and custom metrics.
 - AWS Security Hub findings (if Security Hub is enabled in the account).
 - Amazon SQS Dead Letter Queue storage for failed Lambda invocations.
-- AWS KMS key for encrypting Lambda environment variables and the DLQ, billed monthly plus per API request.
+- AWS Key Management Service (AWS KMS) key for encrypting Lambda environment variables and the DLQ, billed monthly plus per API request.
 
 Costs scale with your Amazon Route 53 record count and the AWS Config evaluation frequency you configure (default: every 24 hours). For current rates in your AWS Region, see the [AWS Lambda pricing page](https://aws.amazon.com/lambda/pricing/), the [AWS Config pricing page](https://aws.amazon.com/config/pricing/), and the [AWS pricing calculator](https://calculator.aws/#/). To control ongoing charges, follow the Cleanup section when the solution is no longer needed.
 
@@ -122,7 +122,9 @@ After the deployment completes, verify that the solution is working:
 
 ## Cleanup
 
-To avoid ongoing charges, delete the CloudFormation stack when you no longer need the solution:
+To avoid ongoing charges, delete the CloudFormation stack when you no longer need the solution.
+
+> **Warning:** Deleting the stack permanently removes all resources it created, including the AWS KMS key (scheduled for deletion with a 30-day recovery window), the Amazon CloudWatch Logs log group, and custom metrics. AWS Config rule evaluation history is retained unless manually deleted. If you need logs or findings for audit purposes, export them before proceeding.
 
 ```bash
 aws cloudformation delete-stack --stack-name dangling-dns-detection
@@ -136,7 +138,7 @@ aws cloudformation describe-stacks --stack-name dangling-dns-detection
 
 You should receive a `Stack with id dangling-dns-detection does not exist` error once deletion is complete.
 
-**Note:** Deleting the stack removes all resources created by the template, including the AWS Lambda function, Lambda permissions, AWS Config rule, Amazon CloudWatch Logs log group, Amazon CloudWatch Dashboard, AWS Key Management Service (AWS KMS) key and alias (with a 30-day deletion window for the key), Amazon Simple Queue Service (Amazon SQS) Dead Letter Queue, and associated AWS Identity and Access Management (AWS IAM) roles and policies. AWS Config rule evaluation history is retained unless manually deleted. AWS Security Hub findings are automatically deleted after 90 days (active findings) or 30 days (archived findings) if not updated. If you need to retain findings or Amazon CloudWatch Logs for audit purposes, export them before the retention period expires or before stack deletion.
+**Note:** Deleting the stack removes all resources created by the template, including the AWS Lambda function, Lambda permissions, AWS Config rule, Amazon CloudWatch Logs log group, Amazon CloudWatch Dashboard, AWS KMS key and alias (with a 30-day deletion window for the key), Amazon Simple Queue Service (Amazon SQS) Dead Letter Queue, and associated AWS Identity and Access Management (AWS IAM) roles and policies. AWS Config rule evaluation history is retained unless manually deleted. AWS Security Hub findings are automatically deleted after 90 days (active findings) or 30 days (archived findings) if not updated. If you need to retain findings or Amazon CloudWatch Logs for audit purposes, export them before the retention period expires or before stack deletion.
 
 ## Project Structure
 
