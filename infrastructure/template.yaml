@@ -184,22 +184,18 @@ Resources:
       KeyPolicy:
         Version: '2012-10-17'
         Statement:
+          # Grant the account root full control so key access can be delegated to
+          # IAM policies (the AWS-recommended default key policy). The Lambda
+          # execution role is granted kms:Decrypt through its own IAM policy (see
+          # LambdaExecutionRole), so the key policy does not need to name the role
+          # directly. This avoids both a circular dependency (Role -> Queue -> Key
+          # -> Role) and the "invalid principal" error that occurs when the key is
+          # created before the role exists.
           - Sid: AllowAccountRoot
             Effect: Allow
             Principal:
               AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: 'kms:*'
-            Resource: '*'
-          - Sid: AllowLambdaDecrypt
-            Effect: Allow
-            Principal:
-              # Reference the role by its deterministic ARN instead of !GetAtt to avoid a
-              # circular dependency (Role -> Queue -> Key -> Role). The role name is fixed
-              # via !Sub '${AWS::StackName}-lambda-role' below, so the ARN is known at
-              # template-build time without creating a dependency on the role resource.
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-lambda-role'
-            Action:
-              - kms:Decrypt
             Resource: '*'
 
   LambdaEnvEncryptionKeyAlias:
