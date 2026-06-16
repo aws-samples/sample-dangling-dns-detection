@@ -96,14 +96,15 @@ Resources:
                   - route53:ListResourceRecordSets
                 Resource: '*'
               
-              # AWS Config — PutEvaluations scoped to config rules in this account/region.
-              # Cannot use !GetAtt DanglingDNSConfigRule.Arn here due to circular dependency
-              # (Role -> ConfigRule -> Lambda -> Role). Scoped to config-rule/* as the narrowest
-              # feasible alternative.
+              # AWS Config PutEvaluations
+              # Resource: '*' required - config:PutEvaluations does not support
+              # resource-level permissions (per AWS API design). It is not
+              # resource-specific, so scoping it to a config-rule ARN causes the
+              # action to be denied at runtime.
               - Effect: Allow
                 Action:
                   - config:PutEvaluations
-                Resource: !Sub 'arn:aws:config:${AWS::Region}:${AWS::AccountId}:config-rule/*'
+                Resource: '*'
               
               # AWS Config — SelectResourceConfig (advanced queries)
               # Resource: '*' required — config:SelectResourceConfig is a global action
