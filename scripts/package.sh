@@ -31,14 +31,14 @@ trap "rm -rf $BUILD_DIR" EXIT
 echo -e "${YELLOW}Installing dependencies...${NC}"
 
 # Install dependencies to build directory
-pip install \
+python3 -m pip install \
     --target "$BUILD_DIR" \
     --platform manylinux2014_x86_64 \
     --implementation cp \
     --python-version 3.11 \
     --only-binary=:all: \
     --upgrade \
-    boto3 2>/dev/null || pip install --target "$BUILD_DIR" boto3
+    boto3 2>/dev/null || python3 -m pip install --target "$BUILD_DIR" boto3
 
 echo -e "${YELLOW}Copying source code...${NC}"
 
